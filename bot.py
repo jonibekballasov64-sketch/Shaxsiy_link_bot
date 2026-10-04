@@ -169,6 +169,8 @@ async def file_received_wrong(message: Message):
 
 async def main():
     init_db()
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("Bot ishga tushdi, polling boshlandi...")
     await dp.start_polling(bot)
 
 
