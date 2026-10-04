@@ -85,15 +85,15 @@ async def names_received(message: Message, state: FSMContext):
         )
         return
 
-    await state.update_data(names=names)
+    await state.update_data(names=names, links=[])
     await state.set_state(NewPost.waiting_links)
 
     preview = "\n".join(f"{i+1}. {n.splitlines()[0]}" for i, n in enumerate(names))
     await message.answer(
         f"✅ {len(names)} ta nom qabul qilindi:\n\n{preview}\n\n"
         f"Endi shu {len(names)} ta nomga mos fayl linklarini yuboring.\n"
-        f"Har bir linkni YANGI QATORDA, nomlar bilan BIR XIL TARTIBDA yozing.\n\n"
-        f"Masalan:\nhttps://t.me/kanal_username/101\nhttps://t.me/kanal_username/102"
+        f"Istasangiz bittadan, istasangiz bir nechtasini birga (har birini yangi qatorda) yuboraverishingiz mumkin — tartib nomlar bilan bir xil bo'lsin.\n\n"
+        f"Link olish uchun: kanalda xabarni ushlab turib «Copy Link»ni bosing."
     )
 
 
@@ -101,17 +101,30 @@ async def names_received(message: Message, state: FSMContext):
 async def links_received(message: Message, state: FSMContext):
     data = await state.get_data()
     names = data["names"]
-    links = parse_links(message.text)
+    collected = data.get("links", [])
 
-    if len(links) != len(names):
+    new_links = parse_links(message.text)
+    collected.extend(new_links)
+
+    if len(collected) < len(names):
+        await state.update_data(links=collected)
+        qolgan = len(names) - len(collected)
         await message.answer(
-            f"⚠️ Nomlar soni ({len(names)}) va linklar soni ({len(links)}) mos kelmadi.\n"
-            f"Iltimos, {len(names)} ta linkni, har birini yangi qatorda, qayta yuboring."
+            f"✅ {len(new_links)} ta link qabul qilindi.\n"
+            f"Jami: {len(collected)}/{len(names)}.\n"
+            f"Yana {qolgan} ta link yuboring (bittadan ham, bir nechtadan ham bo'ladi)."
         )
         return
 
+    if len(collected) > len(names):
+        extra = len(collected) - len(names)
+        await message.answer(
+            f"⚠️ {extra} ta ortiqcha link keldi, ular e'tiborga olinmaydi."
+        )
+        collected = collected[: len(names)]
+
     lines = ["📚 Yangi materiallar:\n"]
-    for name_block, link in zip(names, links):
+    for name_block, link in zip(names, collected):
         parts = name_block.splitlines()
         title = html_lib.escape(parts[0])
         rest = "\n".join(parts[1:])
