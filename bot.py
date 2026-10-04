@@ -54,6 +54,17 @@ def get_file(code):
     return row
 
 
+def parse_names(text: str):
+    # ✳️ belgisi bo'yicha ajratamiz; har bir bo'lak bitta sarlavha hisoblanadi
+    parts = text.split("✳️")
+    blocks = []
+    for part in parts:
+        cleaned = part.strip()
+        if cleaned:
+            blocks.append(cleaned)
+    return blocks
+
+
 class NewPost(StatesGroup):
     waiting_names = State()
     waiting_files = State()
@@ -98,8 +109,10 @@ async def cmd_newpost(message: Message, state: FSMContext):
         return
     await state.set_state(NewPost.waiting_names)
     await message.answer(
-        "Materiallar nomlarini yuboring, har birini YANGI QATORDA.\n\n"
-        "Masalan:\n5-sinf ona tili darsligi pdf\n6-sinf ona tili darsligi pdf"
+        "Materiallar nomlarini yuboring.\n\n"
+        "Har bir nomni ✳️ belgisi bilan boshlang, masalan:\n\n"
+        "✳️5-sinf ona tili darsligi\n📤 PDF shaklda\n"
+        "✳️6-sinf ona tili darsligi\n📤 PDF shaklda"
     )
 
 
@@ -111,15 +124,18 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @dp.message(NewPost.waiting_names)
 async def names_received(message: Message, state: FSMContext):
-    names = [line.strip() for line in message.text.split("\n") if line.strip()]
+    names = parse_names(message.text)
     if not names:
-        await message.answer("Kamida bitta nom yuboring.")
+        await message.answer(
+            "Kamida bitta nom yuboring, har birini ✳️ belgisi bilan boshlang."
+        )
         return
     await state.update_data(names=names, index=0, items=[])
     await state.set_state(NewPost.waiting_files)
+    preview = "\n".join(f"{i+1}. {n.splitlines()[0]}" for i, n in enumerate(names))
     await message.answer(
-        f"✅ {len(names)} ta nom qabul qilindi.\n\n"
-        f"1-fayl: «{names[0]}»\nKanaldan shu faylni forward qiling."
+        f"✅ {len(names)} ta nom qabul qilindi:\n\n{preview}\n\n"
+        f"1-fayl: «{names[0].splitlines()[0]}»\nKanaldan shu faylni forward qiling."
     )
 
 
@@ -141,13 +157,14 @@ async def file_received(message: Message, state: FSMContext):
     if idx < len(names):
         await state.update_data(index=idx, items=items)
         await message.answer(
-            f"✅ Saqlandi.\n\n{idx + 1}-fayl: «{names[idx]}»\nKanaldan shu faylni forward qiling."
+            f"✅ Saqlandi.\n\n{idx + 1}-fayl: «{names[idx].splitlines()[0]}»\n"
+            f"Kanaldan shu faylni forward qiling."
         )
     else:
         bot_user = await bot.get_me()
         lines = ["📚 Yangi materiallar:\n"]
         for t, c in items:
-            lines.append(f"📌 {t}\nhttps://t.me/{bot_user.username}?start={c}\n")
+            lines.append(f"{t}\nhttps://t.me/{bot_user.username}?start={c}\n")
         text = "\n".join(lines)
         await state.clear()
 
