@@ -1,10 +1,11 @@
 import asyncio
 import os
-import sqlite3
-import secrets
+import html as html_lib
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart, CommandObject
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -14,48 +15,17 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-DB_PATH = "posts.db"
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # masalan -1001234567890 yoki @kanal_username
 
-bot = Bot(BOT_TOKEN)
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS files (
-            code TEXT PRIMARY KEY,
-            chat_id INTEGER,
-            message_id INTEGER,
-            title TEXT
-        )"""
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_file(code, chat_id, message_id, title):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "INSERT INTO files (code, chat_id, message_id, title) VALUES (?,?,?,?)",
-        (code, chat_id, message_id, title),
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_file(code):
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute(
-        "SELECT chat_id, message_id, title FROM files WHERE code=?", (code,)
-    ).fetchone()
-    conn.close()
-    return row
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 
 def parse_names(text: str):
-    # ✳️ belgisi bo'yicha ajratamiz; har bir bo'lak bitta sarlavha hisoblanadi
     parts = text.split("✳️")
     blocks = []
     for part in parts:
@@ -65,34 +35,18 @@ def parse_names(text: str):
     return blocks
 
 
+def parse_links(text: str):
+    links = [line.strip() for line in text.split("\n") if line.strip()]
+    return links
+
+
 class NewPost(StatesGroup):
     waiting_names = State()
-    waiting_files = State()
-
-
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    waiting_links = State()
 
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject):
-    args = command.args
-    if args:
-        row = get_file(args)
-        if not row:
-            await message.answer("❌ Havola topilmadi yoki eskirgan.")
-            return
-        chat_id, message_id, title = row
-        try:
-            await bot.copy_message(
-                chat_id=message.from_user.id,
-                from_chat_id=chat_id,
-                message_id=message_id,
-            )
-        except Exception as e:
-            await message.answer(f"❌ Xatolik: {e}")
-        return
-
+async def cmd_start(message: Message):
     if is_admin(message.from_user.id):
         await message.answer(
             "Salom, Admin!\n\n"
@@ -100,7 +54,7 @@ async def cmd_start(message: Message, command: CommandObject):
             "/cancel — jarayonni bekor qilish"
         )
     else:
-        await message.answer("Salom! Bu bot orqali materiallarni yuklab olasiz.")
+        await message.answer("Salom!")
 
 
 @dp.message(Command("newpost"))
@@ -130,62 +84,56 @@ async def names_received(message: Message, state: FSMContext):
             "Kamida bitta nom yuboring, har birini ✳️ belgisi bilan boshlang."
         )
         return
-    await state.update_data(names=names, index=0, items=[])
-    await state.set_state(NewPost.waiting_files)
+
+    await state.update_data(names=names)
+    await state.set_state(NewPost.waiting_links)
+
     preview = "\n".join(f"{i+1}. {n.splitlines()[0]}" for i, n in enumerate(names))
     await message.answer(
         f"✅ {len(names)} ta nom qabul qilindi:\n\n{preview}\n\n"
-        f"1-fayl: «{names[0].splitlines()[0]}»\nKanaldan shu faylni forward qiling."
+        f"Endi shu {len(names)} ta nomga mos fayl linklarini yuboring.\n"
+        f"Har bir linkni YANGI QATORDA, nomlar bilan BIR XIL TARTIBDA yozing.\n\n"
+        f"Masalan:\nhttps://t.me/kanal_username/101\nhttps://t.me/kanal_username/102"
     )
 
 
-@dp.message(NewPost.waiting_files, F.forward_from_chat)
-async def file_received(message: Message, state: FSMContext):
+@dp.message(NewPost.waiting_links)
+async def links_received(message: Message, state: FSMContext):
     data = await state.get_data()
-    names, idx, items = data["names"], data["index"], data["items"]
+    names = data["names"]
+    links = parse_links(message.text)
 
-    if CHANNEL_ID and message.forward_from_chat.id != CHANNEL_ID:
-        await message.answer("⚠️ Bu fayl belgilangan kanaldan emas, qayta forward qiling.")
+    if len(links) != len(names):
+        await message.answer(
+            f"⚠️ Nomlar soni ({len(names)}) va linklar soni ({len(links)}) mos kelmadi.\n"
+            f"Iltimos, {len(names)} ta linkni, har birini yangi qatorda, qayta yuboring."
+        )
         return
 
-    title = names[idx]
-    code = secrets.token_hex(4)
-    save_file(code, message.forward_from_chat.id, message.forward_from_message_id, title)
-    items.append((title, code))
-    idx += 1
+    lines = ["📚 Yangi materiallar:\n"]
+    for name_block, link in zip(names, links):
+        parts = name_block.splitlines()
+        title = html_lib.escape(parts[0])
+        rest = "\n".join(parts[1:])
+        entry = f'<a href="{link}">{title}</a>'
+        if rest:
+            entry += f"\n{rest}"
+        lines.append(entry)
 
-    if idx < len(names):
-        await state.update_data(index=idx, items=items)
+    text = "\n\n".join(lines)
+    await state.clear()
+
+    try:
+        await bot.send_message(CHANNEL_ID, text, disable_web_page_preview=True)
+        await message.answer("🎉 Post tayyor va kanalga avtomatik joylandi ✅")
+    except Exception as e:
         await message.answer(
-            f"✅ Saqlandi.\n\n{idx + 1}-fayl: «{names[idx].splitlines()[0]}»\n"
-            f"Kanaldan shu faylni forward qiling."
+            f"⚠️ Kanalga joylay olmadim ({e}).\n\n"
+            f"Quyidagi matnni qo'lda joylang:\n\n{text}"
         )
-    else:
-        bot_user = await bot.get_me()
-        lines = ["📚 Yangi materiallar:\n"]
-        for t, c in items:
-            lines.append(f"{t}\nhttps://t.me/{bot_user.username}?start={c}\n")
-        text = "\n".join(lines)
-        await state.clear()
-
-        # Avtomatik kanalga joylash
-        try:
-            await bot.send_message(CHANNEL_ID, text)
-            await message.answer("🎉 Post tayyor va kanalga avtomatik joylandi ✅")
-        except Exception as e:
-            await message.answer(
-                f"⚠️ Kanalga joylay olmadim ({e}).\n\n"
-                f"Quyidagi matnni qo'lda joylang:\n\n{text}"
-            )
-
-
-@dp.message(NewPost.waiting_files)
-async def file_received_wrong(message: Message):
-    await message.answer("Iltimos, faylni kanaldan forward qiling (matn emas).")
 
 
 async def main():
-    init_db()
     await bot.delete_webhook(drop_pending_updates=True)
     print("Bot ishga tushdi, polling boshlandi...")
     await dp.start_polling(bot)
